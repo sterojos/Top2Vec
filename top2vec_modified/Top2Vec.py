@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from joblib import dump, load
 from sklearn.cluster import dbscan
 import tempfile
+import pacmap
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import normalize
 from scipy.special import softmax
@@ -425,8 +426,9 @@ class Top2Vec:
                  workers=None,
                  tokenizer=None,
                  use_embedding_model_tokenizer=True,
-                 umap_args=None,
+                 map_args=None,
                  gpu_umap=False,
+                 use_pacmap=True,
                  hdbscan_args=None,
                  gpu_hdbscan=False,
                  index_topics=False,
@@ -702,11 +704,12 @@ class Top2Vec:
         self.serialized_topic_index = None
         self.topics_indexed = False
 
-        self.compute_topics(umap_args=umap_args,
+        self.compute_topics(map_args=map_args,
                             hdbscan_args=hdbscan_args,
                             topic_merge_delta=topic_merge_delta,
                             gpu_umap=gpu_umap,
                             gpu_hdbscan=gpu_hdbscan,
+                            use_pacmap=use_pacmap,
                             index_topics=index_topics)
 
         # initialize document indexing variables
@@ -1307,11 +1310,12 @@ class Top2Vec:
             raise ValueError(f"Vector needs to be of {vec_size} dimensions.")
 
     def compute_topics(self,
-                       umap_args=None,
+                       map_args=None,
                        hdbscan_args=None,
                        topic_merge_delta=0.1,
                        gpu_umap=False,
                        gpu_hdbscan=False,
+                       use_pacmap=True,
                        index_topics=False):
         """
         Computes topics from current document vectors.
@@ -1359,17 +1363,19 @@ class Top2Vec:
         # create 5D embeddings of documents
         logger.info('Creating lower dimension embedding of documents')
 
-        if umap_args is None:
-            umap_args = {'n_neighbors': 15,
+        if map_args is None:
+            map_args = {'n_neighbors': 15,
                          'n_components': 5,
                          'metric': 'cosine'}
-
-        if gpu_umap and _HAVE_CUMAP:
-            umap_model = cuUMAP(**umap_args).fit(self.document_vectors)
-            umap_embedding = umap_model.transform(self.document_vectors)
+        if use_pacmap:
+            map_model = pacmap.PaCMAP(**map_args).fit(self.document_vectors)
+            map_embedding = map_model.transform(self.document_vectors)
+        elif gpu_umap and _HAVE_CUMAP:
+            map_model = cuUMAP(**map_args).fit(self.document_vectors)
+            map_embedding = map_model.transform(self.document_vectors)
         else:
-            umap_model = umap.UMAP(**umap_args).fit(self.document_vectors)
-            umap_embedding = umap_model.embedding_
+            map_model = umap.UMAP(**map_args).fit(self.document_vectors)
+            map_embedding = map_model.embedding_
 
         # find dense areas of document vectors
         logger.info('Finding dense areas of documents')
@@ -1381,10 +1387,10 @@ class Top2Vec:
 
         if gpu_hdbscan and _HAVE_CUHDBSCAN:
             cluster = cuHDBSCAN(**hdbscan_args)
-            labels = cluster.fit_predict(umap_embedding)
+            labels = cluster.fit_predict(map_embedding)
 
         else:
-            cluster = hdbscan.HDBSCAN(**hdbscan_args).fit(umap_embedding)
+            cluster = hdbscan.HDBSCAN(**hdbscan_args).fit(map_embedding)
             labels = cluster.labels_
 
         # calculate topic vectors from dense areas of documents

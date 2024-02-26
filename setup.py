@@ -4,8 +4,8 @@ with open("README.md", "r") as fh:
     long_description = fh.read()
 
 setuptools.setup(
-    name="top2vec",
-    packages=["top2vec"],
+    name="top2vec_modified",
+    packages=["top2vec_modified"],
     version="1.0.34",
     author="Dimo Angelov",
     author_email="dimo.angelov@gmail.com",
@@ -28,6 +28,7 @@ setuptools.setup(
     install_requires=[
         'numpy >= 1.20.0',
         'pandas',
+        'pacmap',
         'scikit-learn >= 1.2.0',
         'gensim >= 4.0.0',
         'umap-learn >= 0.5.1',
