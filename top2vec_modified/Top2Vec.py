@@ -183,224 +183,7 @@ class Top2Vec:
 
     Parameters
     ----------
-    documents: List of str
-        Input corpus, should be a list of strings.
-
-    min_count: int (Optional, default 50)
-        Ignores all words with total frequency lower than this. For smaller
-        corpora a smaller min_count will be necessary.
-
-    topic_merge_delta: float (default 0.1)
-        Merges topic vectors which have a cosine distance smaller than
-        topic_merge_delta using dbscan. The epsilon parameter of dbscan is
-        set to the topic_merge_delta.
-
-    ngram_vocab: bool (Optional, default False)
-        Add phrases to topic descriptions.
-
-        Uses gensim phrases to find common phrases in the corpus and adds them
-        to the vocabulary.
-
-        For more information visit:
-        https://radimrehurek.com/gensim/models/phrases.html
-
-    ngram_vocab_args: dict (Optional, default None)
-        Pass custom arguments to gensim phrases.
-
-        For more information visit:
-        https://radimrehurek.com/gensim/models/phrases.html
-
-    embedding_model: string or callable
-        This will determine which model is used to generate the document and
-        word embeddings. The valid string options are:
-
-            * doc2vec
-            * universal-sentence-encoder
-            * universal-sentence-encoder-large
-            * universal-sentence-encoder-multilingual
-            * universal-sentence-encoder-multilingual-large
-            * distiluse-base-multilingual-cased
-            * all-MiniLM-L6-v2
-            * paraphrase-multilingual-MiniLM-L12-v2
-
-        For large data sets and data sets with very unique vocabulary doc2vec
-        could produce better results. This will train a doc2vec model from
-        scratch. This method is language agnostic. However multiple languages
-        will not be aligned.
-
-        Using the universal sentence encoder options will be much faster since
-        those are pre-trained and efficient models. The universal sentence
-        encoder options are suggested for smaller data sets. They are also
-        good options for large data sets that are in English or in languages
-        covered by the multilingual model. It is also suggested for data sets
-        that are multilingual.
-
-        For more information on universal-sentence-encoder options visit:
-        https://tfhub.dev/google/collections/universal-sentence-encoder/1
-
-        The SBERT pre-trained sentence transformer options are
-        distiluse-base-multilingual-cased,
-        paraphrase-multilingual-MiniLM-L12-v2, and all-MiniLM-L6-v2.
-
-        The distiluse-base-multilingual-cased and
-        paraphrase-multilingual-MiniLM-L12-v2 are suggested for multilingual
-        datasets and languages that are not
-        covered by the multilingual universal sentence encoder. The
-        transformer is significantly slower than the universal sentence
-        encoder options(except for the large options).
-
-        For more information on SBERT options visit:
-        https://www.sbert.net/docs/pretrained_models.html
-
-        If passing a callable embedding_model note that it will not be saved
-        when saving a top2vec model. After loading such a saved top2vec model
-        the set_embedding_model method will need to be called and the same
-        embedding_model callable used during training must be passed to it.
-
-    embedding_model_path: string (Optional)
-        Pre-trained embedding models will be downloaded automatically by
-        default. However they can also be uploaded from a file that is in the
-        location of embedding_model_path.
-
-        Warning: the model at embedding_model_path must match the
-        embedding_model parameter type.
-
-    embedding_batch_size: int (default=32)
-        Batch size for documents being embedded.
-
-    split_documents: bool (default False)
-        If set to True, documents will be split into parts before embedding.
-        After embedding the multiple document part embeddings will be averaged
-        to create a single embedding per document. This is useful when documents
-        are very large or when the embedding model has a token limit.
-
-        Document chunking or a senticizer can be used for document splitting.
-
-    document_chunker: string or callable (default 'sequential')
-        This will break the document into chunks. The valid string options are:
-
-            * sequential
-            * random
-
-        The sequential chunker will split the document into chunks of specified
-        length and ratio of overlap. This is the recommended method.
-
-        The random chunking option will take random chunks of specified length
-        from the document. These can overlap and should be thought of as
-        sampling chunks with replacement from the document.
-
-        If a callable is passed it must take as input a list of tokens of
-        a document and return a list of strings representing the resulting
-        document chunks.
-
-        Only one of document_chunker or sentincizer should be used.
-
-    chunk_length: int (default 100)
-        The number of tokens per document chunk if using the document chunker
-        string options.
-
-    max_num_chunks: int (Optional)
-        The maximum number of chunks generated per document if using the
-        document chunker string options.
-
-    chunk_overlap_ratio: float (default 0.5)
-        Only applies to the 'sequential' document chunker.
-
-        Fraction of overlapping tokens between sequential chunks. A value of
-        0 will result i no overlap, where as 0.5 will overlap half of the
-        previous chunk.
-
-    chunk_len_coverage_ratio: float (default 1.0)
-        Only applies to the 'random' document chunker option.
-
-        Proportion of token length that will be covered by chunks. Default
-        value of 1.0 means chunk lengths will add up to number of tokens of
-        the document. This does not mean all tokens will be covered since
-        chunks can be overlapping.
-
-    sentencizer: callable (Optional)
-        A sentincizer callable can be passed. The input should be a string
-        representing the document and the output should be a list of strings
-        representing the document sentence chunks.
-
-        Only one of document_chunker or sentincizer should be used.
-
-    speed: string (Optional, default 'learn')
-
-        This parameter is only used when using doc2vec as embedding_model.
-
-        It will determine how fast the model takes to train. The
-        fast-learn option is the fastest and will generate the lowest quality
-        vectors. The learn option will learn better quality vectors but take
-        a longer time to train. The deep-learn option will learn the best
-        quality vectors but will take significant time to train. The valid
-        string speed options are:
-        
-            * fast-learn
-            * learn
-            * deep-learn
-
-    use_corpus_file: bool (Optional, default False)
-
-        This parameter is only used when using doc2vec as embedding_model.
-
-        Setting use_corpus_file to True can sometimes provide speedup for
-        large datasets when multiple worker threads are available. Documents
-        are still passed to the model as a list of str, the model will create
-        a temporary corpus file for training.
-
-    document_ids: List of str, int (Optional)
-        A unique value per document that will be used for referring to
-        documents in search results. If ids are not given to the model, the
-        index of each document in the original corpus will become the id.
-
-    keep_documents: bool (Optional, default True)
-        If set to False documents will only be used for training and not saved
-        as part of the model. This will reduce model size. When using search
-        functions only document ids will be returned, not the actual
-        documents.
-
-    workers: int (Optional)
-        The amount of worker threads to be used in training the model. Larger
-        amount will lead to faster training.
-    
-    tokenizer: callable (Optional, default None)
-        Override the default tokenization method. If None then
-        gensim.utils.simple_preprocess will be used.
-
-        Tokenizer must take a document and return a list of tokens.
-
-    use_embedding_model_tokenizer: bool (Optional, default True)
-        If using an embedding model other than doc2vec, use the model's
-        tokenizer for document embedding. If set to True the tokenizer, either
-        default or passed callable will be used to tokenize the text to
-        extract the vocabulary for word embedding.
-
-    umap_args: dict (Optional, default None)
-        Pass custom arguments to UMAP.
-
-    gpu_umap: bool (default False)
-        If True umap will use the rapidsai cuml library to perform the
-        dimensionality reduction. This will lead to a significant speedup
-        in the computation time during model createion. To install rapidsai
-        cuml follow the instructions here: https://docs.rapids.ai/install
-
-    hdbscan_args: dict (Optional, default None)
-        Pass custom arguments to HDBSCAN.
-
-    gpu_hdbscan: bool (default False)
-        If True hdbscan will use the rapidsai cuml library to perform the
-        clustering. This will lead to a significant speedup in the computation
-        time during model creation. To install rapidsai cuml follow the
-        instructions here: https://docs.rapids.ai/install
-
-    index_topics: bool (Optional, default False)
-        If True, the topic vectors will be indexed using hnswlib. This will
-        significantly speed up finding topics during model creation for
-        very large datasets.
-    
-    verbose: bool (Optional, default True)
-        Whether to print status data during training.
+    The details of the parameters can be found in the default config file (Top2Vec_config.yaml).
     """
 
     def __init__(self,
@@ -426,7 +209,7 @@ class Top2Vec:
                  workers=None,
                  tokenizer=None,
                  use_embedding_model_tokenizer=True,
-                 map_args=None,
+                 dimred_args=None,
                  gpu_umap=False,
                  use_pacmap=True,
                  hdbscan_args=None,
@@ -704,7 +487,7 @@ class Top2Vec:
         self.serialized_topic_index = None
         self.topics_indexed = False
 
-        self.compute_topics(map_args=map_args,
+        self.compute_topics(dimred_args=dimred_args,
                             hdbscan_args=hdbscan_args,
                             topic_merge_delta=topic_merge_delta,
                             gpu_umap=gpu_umap,
@@ -1310,7 +1093,7 @@ class Top2Vec:
             raise ValueError(f"Vector needs to be of {vec_size} dimensions.")
 
     def compute_topics(self,
-                       map_args=None,
+                       dimred_args=None,
                        hdbscan_args=None,
                        topic_merge_delta=0.1,
                        gpu_umap=False,
@@ -1331,7 +1114,7 @@ class Top2Vec:
 
         Parameters
         ----------
-        umap_args: dict (Optional, default None)
+        dimred_args: dict (Optional, default None)
             Pass custom arguments to UMAP.
 
         hdbscan_args: dict (Optional, default None)
@@ -1359,22 +1142,23 @@ class Top2Vec:
             lead to faster search times for models with a large number of
             topics.
         """
+        
 
         # create 5D embeddings of documents
         logger.info('Creating lower dimension embedding of documents')
 
-        if map_args is None:
-            map_args = {'n_neighbors': 15,
+        if dimred_args is None:
+            dimred_args = {'n_neighbors': 15,
                          'n_components': 5,
                          'metric': 'cosine'}
         if use_pacmap:
-            map_model = pacmap.PaCMAP(**map_args).fit(self.document_vectors)
+            map_model = pacmap.PaCMAP(**dimred_args).fit(self.document_vectors)
             map_embedding = map_model.transform(self.document_vectors)
         elif gpu_umap and _HAVE_CUMAP:
-            map_model = cuUMAP(**map_args).fit(self.document_vectors)
+            map_model = cuUMAP(**dimred_args).fit(self.document_vectors)
             map_embedding = map_model.transform(self.document_vectors)
         else:
-            map_model = umap.UMAP(**map_args).fit(self.document_vectors)
+            map_model = umap.UMAP(**dimred_args).fit(self.document_vectors)
             map_embedding = map_model.embedding_
 
         # find dense areas of document vectors
