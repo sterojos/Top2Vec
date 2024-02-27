@@ -4,6 +4,39 @@
 [![](https://img.shields.io/badge/arXiv-2008.09470-00ff00.svg)](http://arxiv.org/abs/2008.09470)
 
 
+
+What's going on in this fork: modularizing Top2Vec
+=======
+###TODO
+
+- Separate the run of the `Top2Vec` algorithm (i.e. `Top2Vec.__init__()`) into phases as already roughly specified in the description below
+- Modify `Top2Vec.__init__()` to accept an extra argument, which specifies the phases that should be run
+   - Example: 
+   ````python
+   from Top2Vec import Top2Vec
+   
+   phases = [
+      "create_embeddings",
+      "reduce_dimension",
+      "discover_topics",
+   ]
+
+   documents = ["Example 1", "Example 2", "Example 3"]
+
+   #these two calls should be equivalent
+
+   model = Top2Vec(documents)
+   model = Top2Vec(documents, phases=phases)
+   ````
+   - Require `documents` only if the first phase will be run. Otherwise, require `model`, which is a saved model that must already contain all of the previous phases.
+
+- Include some metadata about the model into the `Top2Vec` object, most importantly the `phases`.
+- Create a new "wrapper constructor" class method `from_config`, satisfying the following:
+  - Accepts a YAML config file similar to [the default config](top2vec_modified/Top2Vec_config.yaml).
+  - If any arguments are missing in the config, the default arguments are used. 
+  - Hard to use callables from a config file though, so this is not a priority
+
+
 **Updates:**
 
 * New pre-trained transformer models available
