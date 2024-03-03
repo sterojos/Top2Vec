@@ -73,6 +73,14 @@ embedding_model_path: null
 # embedding_model parameter type.
 embedding_batch_size: 32
 
+#If set to True, documents will be split into parts before embedding.
+#After embedding the multiple document part embeddings will be averaged
+#to create a single embedding per document. This is useful when documents
+#are very large or when the embedding model has a token limit.
+#
+#Document chunking or a senticizer can be used for document splitting.
+split_documents: false
+
 # This will break the document into chunks. The valid string options are:
 #     * sequential
 #     * random
@@ -178,6 +186,8 @@ hdbscan_args: null
 # instructions here: https://docs.rapids.ai/install
 gpu_hdbscan: false
 
+use_pacmap: false
+
 # If True, the topic vectors will be indexed using hnswlib. This will
 # significantly speed up finding topics during model creation for
 # very large datasets.
@@ -185,3 +195,37 @@ index_topics: False
     
 # Whether to print status data during training.
 verbose: true
+
+#names of phases and relevant attributes
+phases:
+  create_embeddings:
+    - verbose
+    - min_count
+    - ngram_vocab
+    - ngram_vocab_args
+    - embedding_model
+    - embedding_model_path
+    - embedding_batch_size
+    - document_chunker
+    - chunk_length
+    - max_num_chunks
+    - chunk_overlap_ratio
+    - chunk_len_coverage_ratio
+    - sentencizer
+    - speed
+    - use_corpus_file
+    - document_ids
+    - keep_documents
+    - workers
+    - tokenizer
+    - use_embedding_model_tokenizer
+  reduce_dimension:
+    - verbose
+    - dimred_args
+    - gpu_umap
+  discover_topics:
+    - verbose
+    - topic_merge_delta
+    - hdbscan_args
+    - gpu_hdbscan
+    - index_topics

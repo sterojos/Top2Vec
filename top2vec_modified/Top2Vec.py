@@ -19,6 +19,9 @@ import pacmap
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.preprocessing import normalize
 from scipy.special import softmax
+import yaml
+import os
+from typing import Union, Callable
 
 try:
     from cuml.manifold.umap import UMAP as cuUMAP
@@ -173,7 +176,6 @@ def get_random_chunks(tokens, chunk_length, chunk_len_coverage_ratio, max_num_ch
     starts = np.random.choice(range(0, num_tokens), size=num_chunks)
     return [" ".join(tokens[i:i + chunk_length]) for i in starts]
 
-
 class Top2Vec:
     """
     Top2Vec
@@ -186,314 +188,87 @@ class Top2Vec:
     The details of the parameters can be found in the default config file (Top2Vec_config.yaml).
     """
 
-    def __init__(self,
-                 documents,
-                 min_count=50,
-                 topic_merge_delta=0.1,
-                 ngram_vocab=False,
-                 ngram_vocab_args=None,
-                 embedding_model='universal-sentence-encoder-multilingual',
-                 embedding_model_path=None,
-                 embedding_batch_size=32,
-                 split_documents=False,
-                 document_chunker='sequential',
-                 chunk_length=100,
-                 max_num_chunks=None,
-                 chunk_overlap_ratio=0.5,
-                 chunk_len_coverage_ratio=1.0,
-                 sentencizer=None,
-                 speed='learn',
-                 use_corpus_file=False,
-                 document_ids=None,
-                 keep_documents=True,
-                 workers=None,
-                 tokenizer=None,
-                 use_embedding_model_tokenizer=True,
-                 dimred_args=None,
-                 gpu_umap=False,
-                 use_pacmap=True,
-                 hdbscan_args=None,
-                 gpu_hdbscan=False,
-                 index_topics=False,
-                 verbose=True
-                 ):
+    min_count: int
+    verbose: bool
+    chunk_length: int
+    max_num_chunks: int
+    chunk_overlap_ratio: float
+    topic_merge_delta: float
+    ngram_vocab: bool
+    embedding_model: Union[str, None]
+    embedding_model_path: Union[str, None]
+    embedding_batch_size: int
+    speed: str
+    document_chunker: str
+    chunk_length: int
+    sentencizer: Union[Callable, None]
+    document_ids: Union[list, None]
+    use_corpus_file: bool
+    split_documents: bool
+    gpu_umap: bool
+    keep_documents: bool
+    workers: Union[int, None]
+    use_embedding_model_tokenizer: bool
+    dimred_args: Union[dict, None]
+    ngram_vocab_args: Union[dict, None]
+    hdbscan_args: Union[dict, None]
 
-        if verbose:
+
+    def __init__(self, documents=None, **config):
+
+        with open(os.path.join(os.path.dirname(__file__), 'Top2Vec_config.yaml')) as f:
+            default_config: dict = yaml.safe_load(f)
+        
+        for key, value in config.items():
+            setattr(self, key, value)
+        
+        for key, value in default_config.items():
+            if key not in config:
+                setattr(self, key, value)
+
+        if "plain" not in self.__dict__:
+            self.plain = False
+
+        if self.plain:
+            return
+
+        if not documents:
+            raise ValueError("Documents for full run not provided")
+
+        if self.verbose:
             logger.setLevel(logging.DEBUG)
-            self.verbose = True
         else:
             logger.setLevel(logging.WARNING)
-            self.verbose = False
 
-        if tokenizer is None:
-            tokenizer = default_tokenizer
+        if self.tokenizer is None:
+            self.tokenizer = default_tokenizer
 
-        # validate documents
-        if not (isinstance(documents, list) or isinstance(documents, np.ndarray)):
-            raise ValueError("Documents need to be a list of strings")
-        if not all((isinstance(doc, str) or isinstance(doc, np.str_)) for doc in documents):
-            raise ValueError("Documents need to be a list of strings")
-        if keep_documents:
-            self.documents = np.array(documents, dtype="object")
-        else:
-            self.documents = None
+        self.documents = documents
+        self.document_chunker_args = {
+            "chunk_length": self.chunk_length,
+            "max_num_chunks": self.max_num_chunks,
+            "chunk_overlap_ratio": self.chunk_overlap_ratio
+        }
 
-        # validate document ids
-        if document_ids is not None:
-            if not (isinstance(document_ids, list) or isinstance(document_ids, np.ndarray)):
-                raise ValueError("Documents ids need to be a list of str or int")
+        self._validate_init_inputs()
 
-            if len(documents) != len(document_ids):
-                raise ValueError("Document ids need to match number of documents")
-            elif len(document_ids) != len(set(document_ids)):
-                raise ValueError("Document ids need to be unique")
+        if self.embedding_model == 'doc2vec':
 
-            if all((isinstance(doc_id, str) or isinstance(doc_id, np.str_)) for doc_id in document_ids):
-                self.doc_id_type = np.str_
-            elif all((isinstance(doc_id, int) or isinstance(doc_id, np.int_)) for doc_id in document_ids):
-                self.doc_id_type = np.int_
-            else:
-                raise ValueError("Document ids need to be str or int")
+            self._train_doc2vec_model()
 
-            self.document_ids_provided = True
-            self.document_ids = np.array(document_ids)
-            self.doc_id2index = dict(zip(document_ids, list(range(0, len(document_ids)))))
-        else:
-            self.document_ids_provided = False
-            self.document_ids = np.array(range(0, len(documents)))
-            self.doc_id2index = dict(zip(self.document_ids, list(range(0, len(self.document_ids)))))
-            self.doc_id_type = np.int_
-
-        self.embedding_model_path = embedding_model_path
-
-        # validate document splitting
-        use_sentencizer = False
-        custom_chunker = False
-        if split_documents:
-            if document_chunker == 'sequential':
-                document_chunker = get_chunks
-                document_chunker_args = {"chunk_length": chunk_length,
-                                         "max_num_chunks": max_num_chunks,
-                                         "chunk_overlap_ratio": chunk_overlap_ratio}
-
-            elif document_chunker == 'random':
-                document_chunker = get_random_chunks
-                document_chunker_args = {"chunk_length": chunk_length,
-                                         "max_num_chunks": max_num_chunks,
-                                         "chunk_len_coverage_ratio": chunk_len_coverage_ratio}
-
-            elif callable(document_chunker):
-                custom_chunker = True
-            elif sentencizer is None:
-                raise ValueError(f"{document_chunker} is an invalid document chunker.")
-            elif callable(sentencizer):
-                use_sentencizer = True
-            else:
-                raise ValueError(f"{sentencizer} is invalid. Document sentencizer must be callable.")
-
-        if embedding_model == 'doc2vec':
-
-            # validate training inputs
-            if speed == "fast-learn":
-                hs = 0
-                negative = 5
-                epochs = 40
-            elif speed == "learn":
-                hs = 1
-                negative = 0
-                epochs = 40
-            elif speed == "deep-learn":
-                hs = 1
-                negative = 0
-                epochs = 400
-            elif speed == "test-learn":
-                hs = 0
-                negative = 5
-                epochs = 1
-            else:
-                raise ValueError("speed parameter needs to be one of: fast-learn, learn or deep-learn")
-
-            if workers is None:
-                pass
-            elif isinstance(workers, int):
-                pass
-            else:
-                raise ValueError("workers needs to be an int")
-
-            doc2vec_args = {"vector_size": 300,
-                            "min_count": min_count,
-                            "window": 15,
-                            "sample": 1e-5,
-                            "negative": negative,
-                            "hs": hs,
-                            "epochs": epochs,
-                            "dm": 0,
-                            "dbow_words": 1}
-
-            if workers is not None:
-                doc2vec_args["workers"] = workers
-
-            logger.info('Pre-processing documents for training')
-
-            if use_corpus_file:
-                processed = [' '.join(tokenizer(doc)) for doc in documents]
-                lines = "\n".join(processed)
-                temp = tempfile.NamedTemporaryFile(mode='w+t')
-                temp.write(lines)
-                doc2vec_args["corpus_file"] = temp.name
-
-            else:
-                train_corpus = [TaggedDocument(tokenizer(doc), [i]) for i, doc in enumerate(documents)]
-                doc2vec_args["documents"] = train_corpus
-
-            logger.info('Creating joint document/word embedding')
-            self.embedding_model = 'doc2vec'
-            self.model = Doc2Vec(**doc2vec_args)
-
-            self.word_vectors = self.model.wv.get_normed_vectors()
-            self.word_indexes = self.model.wv.key_to_index
-            self.vocab = list(self.model.wv.key_to_index.keys())
-            self.document_vectors = self.model.dv.get_normed_vectors()
-
-            if ngram_vocab:
-                tokenized_corpus = [tokenizer(doc) for doc in documents]
-
-                if ngram_vocab_args is None:
-                    ngram_vocab_args = {'sentences': tokenized_corpus,
-                                        'min_count': 5,
-                                        'threshold': 10.0,
-                                        'delimiter': ' '}
-                else:
-                    ngram_vocab_args['sentences'] = tokenized_corpus
-                    ngram_vocab_args['delimiter'] = ' '
-
-                phrase_model = Phrases(**ngram_vocab_args)
-                phrase_results = phrase_model.find_phrases(tokenized_corpus)
-                phrases = list(phrase_results.keys())
-
-                phrases_processed = [tokenizer(phrase) for phrase in phrases]
-                phrase_vectors = np.vstack([self.model.infer_vector(doc_words=phrase,
-                                                                    alpha=0.025,
-                                                                    min_alpha=0.01,
-                                                                    epochs=100) for phrase in phrases_processed])
-                phrase_vectors = self._l2_normalize(phrase_vectors)
-
-                self.word_vectors = np.vstack([self.word_vectors, phrase_vectors])
-                self.vocab = self.vocab + phrases
-                self.word_indexes = dict(zip(self.vocab, range(len(self.vocab))))
-
-            if use_corpus_file:
-                temp.close()
-
-        elif (embedding_model in acceptable_embedding_models) or callable(embedding_model):
-
-            self.embed = None
-            self.embedding_model = embedding_model
-
-            self._check_import_status()
-
-            logger.info('Pre-processing documents for training')
-
-            # preprocess documents
-            tokenized_corpus = [tokenizer(doc) for doc in documents]
-
-            def return_doc(doc):
-                return doc
-
-            # preprocess vocabulary
-            vectorizer = CountVectorizer(tokenizer=return_doc, preprocessor=return_doc)
-            doc_word_counts = vectorizer.fit_transform(tokenized_corpus)
-            words = vectorizer.get_feature_names_out()
-            word_counts = np.array(np.sum(doc_word_counts, axis=0).tolist()[0])
-            vocab_inds = np.where(word_counts > min_count)[0]
-
-            if len(vocab_inds) == 0:
-                raise ValueError(f"A min_count of {min_count} results in "
-                                 f"all words being ignored, choose a lower value.")
-            self.vocab = [words[ind] for ind in vocab_inds]
-
-            if ngram_vocab:
-                if ngram_vocab_args is None:
-                    ngram_vocab_args = {'sentences': tokenized_corpus,
-                                        'min_count': 5,
-                                        'threshold': 10.0,
-                                        'delimiter': ' '}
-                else:
-                    ngram_vocab_args['sentences'] = tokenized_corpus
-                    ngram_vocab_args['delimiter'] = ' '
-
-                phrase_model = Phrases(**ngram_vocab_args)
-                phrase_results = phrase_model.find_phrases(tokenized_corpus)
-                phrases = list(phrase_results.keys())
-
-                self.vocab = self.vocab + phrases
-
-            self._check_model_status()
-
-            logger.info('Creating joint document/word embedding')
-
-            # embed words
-            self.word_indexes = dict(zip(self.vocab, range(len(self.vocab))))
-            self.word_vectors = self._embed_documents(self.vocab, embedding_batch_size)
-
-            # embed documents
-
-            # split documents
-            if split_documents:
-                if use_sentencizer:
-                    chunk_id = 0
-                    chunked_docs = []
-                    chunked_doc_ids = []
-                    for doc in documents:
-                        doc_chunks = sentencizer(doc)
-                        doc_chunk_ids = [chunk_id] * len(doc_chunks)
-                        chunk_id += 1
-                        chunked_docs.extend(doc_chunks)
-                        chunked_doc_ids.extend(doc_chunk_ids)
-
-                else:
-                    chunk_id = 0
-                    chunked_docs = []
-                    chunked_doc_ids = []
-                    for tokens in tokenized_corpus:
-                        if custom_chunker:
-                            doc_chunks = document_chunker(tokens)
-                        else:
-                            doc_chunks = document_chunker(tokens, **document_chunker_args)
-                        doc_chunk_ids = [chunk_id] * len(doc_chunks)
-                        chunk_id += 1
-                        chunked_docs.extend(doc_chunks)
-                        chunked_doc_ids.extend(doc_chunk_ids)
-
-                chunked_doc_ids = np.array(chunked_doc_ids)
-                document_chunk_vectors = self._embed_documents(chunked_docs, embedding_batch_size)
-                self.document_vectors = self._l2_normalize(
-                    np.vstack([document_chunk_vectors[np.where(chunked_doc_ids == label)[0]]
-                              .mean(axis=0) for label in set(chunked_doc_ids)]))
-
-            # original documents
-            else:
-                if use_embedding_model_tokenizer:
-                    self.document_vectors = self._embed_documents(documents, embedding_batch_size)
-                else:
-                    train_corpus = [' '.join(tokens) for tokens in tokenized_corpus]
-                    self.document_vectors = self._embed_documents(train_corpus, embedding_batch_size)
+        elif (self.embedding_model in acceptable_embedding_models) or callable(self.embedding_model):
+            
+            self._embeddings_from_predefined_model()
 
         else:
-            raise ValueError(f"{embedding_model} is an invalid embedding model.")
+            raise ValueError(f"{self.embedding_model} is an invalid embedding model.")
 
         # initialize topic indexing variables
         self.topic_index = None
         self.serialized_topic_index = None
         self.topics_indexed = False
 
-        self.compute_topics(dimred_args=dimred_args,
-                            hdbscan_args=hdbscan_args,
-                            topic_merge_delta=topic_merge_delta,
-                            gpu_umap=gpu_umap,
-                            gpu_hdbscan=gpu_hdbscan,
-                            use_pacmap=use_pacmap,
-                            index_topics=index_topics)
+        self.compute_topics()
 
         # initialize document indexing variables
         self.document_index = None
@@ -506,6 +281,246 @@ class Top2Vec:
         self.word_index = None
         self.serialized_word_index = None
         self.words_indexed = False
+
+    def _train_doc2vec_model(self):
+        # validate training inputs
+        if self.speed == "fast-learn":
+            hs = 0
+            negative = 5
+            epochs = 40
+        elif self.speed == "learn":
+            hs = 1
+            negative = 0
+            epochs = 40
+        elif self.speed == "deep-learn":
+            hs = 1
+            negative = 0
+            epochs = 400
+        elif self.speed == "test-learn":
+            hs = 0
+            negative = 5
+            epochs = 1
+        else:
+            raise ValueError("speed parameter needs to be one of: fast-learn, learn or deep-learn")
+
+        if self.workers is None:
+            pass
+        elif not isinstance(self.workers, int):
+            raise ValueError("workers needs to be an int")
+
+        doc2vec_args = {"vector_size": 300,
+                        "min_count": self.min_count,
+                        "window": 15,
+                        "sample": 1e-5,
+                        "negative": negative,
+                        "hs": hs,
+                        "epochs": epochs,
+                        "dm": 0,
+                        "dbow_words": 1}
+
+        if self.workers is not None:
+            doc2vec_args["workers"] = self.workers
+
+        logger.info('Pre-processing documents for training')
+
+        if self.use_corpus_file:
+            processed = [' '.join(self.tokenizer(doc)) for doc in self.documents]
+            lines = "\n".join(processed)
+            temp = tempfile.NamedTemporaryFile(mode='w+t')
+            temp.write(lines)
+            doc2vec_args["corpus_file"] = temp.name
+
+        else:
+            train_corpus = [TaggedDocument(self.tokenizer(doc), [i]) for i, doc in enumerate(self.documents)]
+            doc2vec_args["documents"] = train_corpus
+
+        logger.info('Creating joint document/word embedding')
+        self.embedding_model = 'doc2vec'
+        self.model = Doc2Vec(**doc2vec_args)
+
+        self.word_vectors = self.model.wv.get_normed_vectors()
+        self.word_indexes = self.model.wv.key_to_index
+        self.vocab = list(self.model.wv.key_to_index.keys())
+        self.document_vectors = self.model.dv.get_normed_vectors()
+
+        if self.ngram_vocab:
+            tokenized_corpus = [self.tokenizer(doc) for doc in self.documents]
+
+            if self.ngram_vocab_args is None:
+                self.ngram_vocab_args = {'sentences': tokenized_corpus,
+                                    'min_count': 5,
+                                    'threshold': 10.0,
+                                    'delimiter': ' '}
+            else:
+                self.ngram_vocab_args['sentences'] = tokenized_corpus
+                self.ngram_vocab_args['delimiter'] = ' '
+
+            phrase_model = Phrases(**self.ngram_vocab_args)
+            phrase_results = phrase_model.find_phrases(tokenized_corpus)
+            phrases = list(phrase_results.keys())
+
+            phrases_processed = [self.tokenizer(phrase) for phrase in phrases]
+            self.phrase_vectors = np.vstack([self.model.infer_vector(doc_words=phrase,
+                                                                alpha=0.025,
+                                                                min_alpha=0.01,
+                                                                epochs=100) for phrase in phrases_processed])
+            self.phrase_vectors = self._l2_normalize(self.phrase_vectors)
+
+            self.word_vectors = np.vstack([self.word_vectors, self.phrase_vectors])
+            self.vocab = self.vocab + phrases
+            self.word_indexes = dict(zip(self.vocab, range(len(self.vocab))))
+
+        if self.use_corpus_file:
+            temp.close()
+
+    def _validate_init_inputs(self):
+        # validate documents
+        if not (isinstance(self.documents, list) or isinstance(self.documents, np.ndarray)):
+            raise ValueError("Documents need to be a list of strings")
+        if not all((isinstance(doc, str) or isinstance(doc, np.str_)) for doc in self.documents):
+            raise ValueError("Documents need to be a list of strings")
+        if self.keep_documents:
+            self.documents = np.array(self.documents, dtype="object")
+        else:
+            self.documents = None
+
+        # validate document ids
+        if self.document_ids is not None:
+            if not (isinstance(self.document_ids, list) or isinstance(self.document_ids, np.ndarray)):
+                raise ValueError("Documents ids need to be a list of str or int")
+
+            if len(self.documents) != len(self.document_ids):
+                raise ValueError("Document ids need to match number of documents")
+            elif len(self.document_ids) != len(set(self.document_ids)):
+                raise ValueError("Document ids need to be unique")
+
+            if all((isinstance(doc_id, str) or isinstance(doc_id, np.str_)) for doc_id in self.document_ids):
+                self.doc_id_type = np.str_
+            elif all((isinstance(doc_id, int) or isinstance(doc_id, np.int_)) for doc_id in self.document_ids):
+                self.doc_id_type = np.int_
+            else:
+                raise ValueError("Document ids need to be str or int")
+
+            self.document_ids_provided = True
+            self.document_ids = np.array(self.document_ids)
+            self.doc_id2index = dict(zip(self.document_ids, list(range(0, len(self.document_ids)))))
+        else:
+            self.document_ids_provided = False
+            self.document_ids = np.array(range(0, len(self.documents)))
+            self.doc_id2index = dict(zip(self.document_ids, list(range(0, len(self.document_ids)))))
+            self.doc_id_type = np.int_
+
+        # validate document splitting
+        self.use_sentencizer = False
+        self.custom_chunker = False
+        if self.split_documents:
+            if document_chunker == 'sequential':
+                document_chunker = get_chunks
+            elif document_chunker == 'random':
+                document_chunker = get_random_chunks
+            elif callable(document_chunker):
+                self.custom_chunker = True
+            elif self.sentencizer is None:
+                raise ValueError(f"{document_chunker} is an invalid document chunker.")
+            elif callable(self.sentencizer):
+                self.use_sentencizer = True
+            else:
+                raise ValueError(f"{self.sentencizer} is invalid. Document sentencizer must be callable.")
+
+    def _embeddings_from_predefined_model(self):
+
+        self.embed = None
+
+        self._check_import_status()
+
+        logger.info('Pre-processing documents for training')
+
+        # preprocess documents
+        tokenized_corpus = [self.tokenizer(doc) for doc in self.documents]
+
+        def return_doc(doc):
+            return doc
+
+        # preprocess vocabulary
+        vectorizer = CountVectorizer(tokenizer=return_doc, preprocessor=return_doc)
+        doc_word_counts = vectorizer.fit_transform(tokenized_corpus)
+        words = vectorizer.get_feature_names_out()
+        word_counts = np.array(np.sum(doc_word_counts, axis=0).tolist()[0])
+        vocab_inds = np.where(word_counts > self.min_count)[0]
+
+        if len(vocab_inds) == 0:
+            raise ValueError(f"A min_count of {self.min_count} results in "
+                                f"all words being ignored, choose a lower value.")
+        self.vocab = [words[ind] for ind in vocab_inds]
+
+        if self.ngram_vocab:
+            if self.ngram_vocab_args is None:
+                self.ngram_vocab_args = {'sentences': tokenized_corpus,
+                                    'min_count': 5,
+                                    'threshold': 10.0,
+                                    'delimiter': ' '}
+            else:
+                self.ngram_vocab_args['sentences'] = tokenized_corpus
+                self.ngram_vocab_args['delimiter'] = ' '
+
+            phrase_model = Phrases(**self.ngram_vocab_args)
+            phrase_results = phrase_model.find_phrases(tokenized_corpus)
+            phrases = list(phrase_results.keys())
+
+            self.vocab = self.vocab + phrases
+
+        self._check_model_status()
+
+        logger.info('Creating joint document/word embedding')
+
+        # embed words
+        self.word_indexes = dict(zip(self.vocab, range(len(self.vocab))))
+        self.word_vectors = self._embed_documents(self.vocab, self.embedding_batch_size)
+
+        # embed documents
+
+        # split documents
+        if self.split_documents:
+            if self.use_sentencizer:
+                assert self.sentencizer is not None
+                chunk_id = 0
+                chunked_docs = []
+                chunked_doc_ids = []
+                for doc in self.documents:
+                    doc_chunks = self.sentencizer(doc)
+                    doc_chunk_ids = [chunk_id] * len(doc_chunks)
+                    chunk_id += 1
+                    chunked_docs.extend(doc_chunks)
+                    chunked_doc_ids.extend(doc_chunk_ids)
+
+            else:
+                chunk_id = 0
+                chunked_docs = []
+                chunked_doc_ids = []
+                for tokens in tokenized_corpus:
+                    if self.custom_chunker:
+                        doc_chunks = self.document_chunker(tokens)
+                    else:
+                        doc_chunks = self.document_chunker(tokens, **self.document_chunker_args)
+                    doc_chunk_ids = [chunk_id] * len(doc_chunks)
+                    chunk_id += 1
+                    chunked_docs.extend(doc_chunks)
+                    chunked_doc_ids.extend(doc_chunk_ids)
+
+            chunked_doc_ids = np.array(chunked_doc_ids)
+            document_chunk_vectors = self._embed_documents(chunked_docs, self.embedding_batch_size)
+            self.document_vectors = self._l2_normalize(
+                np.vstack([document_chunk_vectors[np.where(chunked_doc_ids == label)[0]]
+                            .mean(axis=0) for label in set(chunked_doc_ids)]))
+
+        # original documents
+        else:
+            if self.use_embedding_model_tokenizer:
+                self.document_vectors = self._embed_documents(self.documents, self.embedding_batch_size)
+            else:
+                train_corpus = [' '.join(tokens) for tokens in tokenized_corpus]
+                self.document_vectors = self._embed_documents(train_corpus, self.embedding_batch_size)
+
 
     def save(self, file):
         """
@@ -557,6 +572,118 @@ class Top2Vec:
         self.document_index = document_index_temp
         self.word_index = word_index_temp
         self.topic_index = topic_index_temp
+
+    @classmethod
+    def run(cls, documents=None, from_model_path=None, config_modifier=None, override_config=True):
+        """f
+        TODO:
+        Implement loading the config from file.
+        
+        """
+
+        with open(os.path.join(os.path.dirname(__file__), 'Top2Vec_config.yaml')) as f:
+            config: dict = yaml.safe_load(f)
+            phases = list(config["phases"])
+
+        #generate config
+        if config_modifier is not None:
+            assert isinstance(config_modifier, dict), "Config modifier is not a dictionary"
+            assert all(k in config for k in config_modifier)
+
+            #copy attributes from default config to user-defined config
+            config_modifier["phases"] = {k: v for k, v in config["phases"].items() if k in config_modifier["phases"]}
+            config.update(config_modifier)
+
+        relevant_attrs = list(set([i for v in config["phases"].values() for i in v]))
+
+        #validate input args
+        if not (documents or from_model_path):
+            raise ValueError("No documents or existing model provided - Top2Vec cannot initiate.")
+
+        if (documents is None) == (from_model_path is None):
+            raise ValueError("Please provide either starting documents, or an existing model")
+
+        if from_model_path:
+            model = cls.load(from_model_path)
+            model_phases = getattr(model, "phases", [])
+            expected_config = model.__dict__
+            for key, value in config.items():
+                if key not in relevant_attrs:
+                    if (k1 := expected_config.get(key)) and (k2 := config.get(key)) and k1 != k2:
+                        logging.warn(f"Value for unused config attribute {key} does not match. The value from loaded model will be kept.")
+                    continue
+                if key in expected_config and expected_config[key] != value and not override_config:
+                    raise ValueError(f"Attempt to overwrite value {str(expected_config[key])} with {str(value)} for attribute {key}")
+                setattr(model, key, value)        
+        else:
+            model_phases = list()
+            #check that we can start at the beginning
+            if (initial_phase := phases[0]) not in config["phases"]:
+                raise ValueError(f"Initial phase {initial_phase} not in specified phases. Cannot start building model from documents.")
+            model = Top2Vec(plain=True)
+            for key, value in config.items():
+                setattr(model, key, value)
+        
+        executed_phases = list(config["phases"])
+
+        if (duplicate_phases := [phase for phase in executed_phases if phase in model_phases]):
+            raise ValueError(f"Phases scheduled for execution already included in passed model: {duplicate_phases}")
+
+        #validate continuity of phases
+        executed_phase_order = sorted([phases.index(i) for i in model_phases + executed_phases])
+        phase_order_diff = [executed_phase_order[i+1] - executed_phase_order[i] for i in range(len(executed_phase_order) - 1)]
+        if any(i != 1 for i in phase_order_diff):
+            raise ValueError(f"Missing phase in between executed phases, please verify phases in config. Indices: {phase_order_diff}")
+        
+        if model.verbose:
+            logger.setLevel(logging.DEBUG)
+        else:
+            logger.setLevel(logging.WARNING)
+
+        if "create_embeddings" in executed_phases:
+            if model.tokenizer is None:
+                model.tokenizer = default_tokenizer
+
+            model.documents = documents
+            model.document_chunker_args = {
+                "chunk_length": model.chunk_length,
+                "max_num_chunks": model.max_num_chunks,
+                "chunk_overlap_ratio": model.chunk_overlap_ratio
+            }
+
+            model._validate_init_inputs()
+
+            if model.embedding_model == 'doc2vec':
+
+                model._train_doc2vec_model()
+
+            elif (model.embedding_model in acceptable_embedding_models) or callable(model.embedding_model):
+                
+                model._embeddings_from_predefined_model()
+
+            else:
+                raise ValueError(f"{model.embedding_model} is an invalid embedding model.")
+
+        # initialize topic indexing variables
+        model.topic_index = None
+        model.serialized_topic_index = None
+        model.topics_indexed = False
+
+        model.compute_topics()
+
+        # initialize document indexing variables
+        model.document_index = None
+        model.serialized_document_index = None
+        model.documents_indexed = False
+        model.index_id2doc_id = None
+        model.doc_id2index_id = None
+
+        # initialize word indexing variables
+        model.word_index = None
+        model.serialized_word_index = None
+        model.words_indexed = False
+
+        return model
 
     @classmethod
     def load(cls, file):
@@ -1092,14 +1219,7 @@ class Top2Vec:
         if not vector.shape[0] == vec_size:
             raise ValueError(f"Vector needs to be of {vec_size} dimensions.")
 
-    def compute_topics(self,
-                       dimred_args=None,
-                       hdbscan_args=None,
-                       topic_merge_delta=0.1,
-                       gpu_umap=False,
-                       gpu_hdbscan=False,
-                       use_pacmap=True,
-                       index_topics=False):
+    def compute_topics(self):
         """
         Computes topics from current document vectors.
 
@@ -1147,34 +1267,35 @@ class Top2Vec:
         # create 5D embeddings of documents
         logger.info('Creating lower dimension embedding of documents')
 
-        if dimred_args is None:
-            dimred_args = {'n_neighbors': 15,
+        if self.use_pacmap:
+            map_model = pacmap.PaCMAP(**self.dimred_args).fit(self.document_vectors)
+            map_embedding = map_model.transform(self.document_vectors)
+
+        if self.dimred_args is None:
+            self.dimred_args = {'n_neighbors': 15,
                          'n_components': 5,
                          'metric': 'cosine'}
-        if use_pacmap:
-            map_model = pacmap.PaCMAP(**dimred_args).fit(self.document_vectors)
-            map_embedding = map_model.transform(self.document_vectors)
-        elif gpu_umap and _HAVE_CUMAP:
-            map_model = cuUMAP(**dimred_args).fit(self.document_vectors)
+        if self.gpu_umap and _HAVE_CUMAP:
+            map_model = cuUMAP(**self.dimred_args).fit(self.document_vectors)
             map_embedding = map_model.transform(self.document_vectors)
         else:
-            map_model = umap.UMAP(**dimred_args).fit(self.document_vectors)
+            map_model = umap.UMAP(**self.dimred_args).fit(self.document_vectors)
             map_embedding = map_model.embedding_
 
         # find dense areas of document vectors
         logger.info('Finding dense areas of documents')
 
-        if hdbscan_args is None:
-            hdbscan_args = {'min_cluster_size': 15,
+        if self.hdbscan_args is None:
+            self.hdbscan_args = {'min_cluster_size': 15,
                             'metric': 'euclidean',
                             'cluster_selection_method': 'eom'}
 
-        if gpu_hdbscan and _HAVE_CUHDBSCAN:
-            cluster = cuHDBSCAN(**hdbscan_args)
+        if self.gpu_hdbscan and _HAVE_CUHDBSCAN:
+            cluster = cuHDBSCAN(**self.hdbscan_args)
             labels = cluster.fit_predict(map_embedding)
 
         else:
-            cluster = hdbscan.HDBSCAN(**hdbscan_args).fit(map_embedding)
+            cluster = hdbscan.HDBSCAN(**self.hdbscan_args).fit(map_embedding)
             labels = cluster.labels_
 
         # calculate topic vectors from dense areas of documents
@@ -1184,12 +1305,12 @@ class Top2Vec:
         self._create_topic_vectors(labels)
 
         # deduplicate topics
-        self._deduplicate_topics(topic_merge_delta)
+        self._deduplicate_topics(self.topic_merge_delta)
 
         # find topic words and scores
         self.topic_words, self.topic_word_scores = self._find_topic_words_and_scores(topic_vectors=self.topic_vectors)
 
-        if index_topics:
+        if self.index_topics:
             self.index_topic_vectors()
             topic_index = self.topic_index
         else:

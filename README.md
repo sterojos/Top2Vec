@@ -29,6 +29,7 @@ What's going on in this fork: modularizing Top2Vec
    model = Top2Vec(documents, phases=phases)
    ````
    - Require `documents` only if the first phase will be run. Otherwise, require `model`, which is a saved model that must already contain all of the previous phases.
+      - This will probably require `keep_documents=True`
 
 - Include some metadata about the model into the `Top2Vec` object, most importantly the `phases`.
 - Create a new "wrapper constructor" class method `from_config`, satisfying the following:
