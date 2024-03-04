@@ -22,6 +22,7 @@ from scipy.special import softmax
 import yaml
 import os
 from typing import Union, Callable
+from pkg_resources import resource_filename
 
 try:
     from cuml.manifold.umap import UMAP as cuUMAP
@@ -216,7 +217,7 @@ class Top2Vec:
 
     def __init__(self, documents=None, **config):
 
-        with open(os.path.join(os.path.dirname(__file__), 'Top2Vec_config.yaml')) as f:
+        with open(resource_filename('top2vec_modified', 'Top2Vec_config.yaml')) as f:
             default_config: dict = yaml.safe_load(f)
         
         for key, value in config.items():
@@ -268,7 +269,8 @@ class Top2Vec:
         self.serialized_topic_index = None
         self.topics_indexed = False
 
-        self.compute_topics()
+        self.reduce_dimension()
+        self.discover_topics()
 
         # initialize document indexing variables
         self.document_index = None
@@ -668,8 +670,14 @@ class Top2Vec:
         model.topic_index = None
         model.serialized_topic_index = None
         model.topics_indexed = False
+        
+        if "reduce_dimension" in executed_phases:
 
-        model.compute_topics()
+            model.reduce_dimension()
+        
+        if "discover_topics" in executed_phases:
+
+            model.discover_topics()
 
         # initialize document indexing variables
         model.document_index = None
@@ -1219,7 +1227,7 @@ class Top2Vec:
         if not vector.shape[0] == vec_size:
             raise ValueError(f"Vector needs to be of {vec_size} dimensions.")
 
-    def compute_topics(self):
+    def reduce_dimension(self):
         """
         Computes topics from current document vectors.
 
@@ -1268,19 +1276,19 @@ class Top2Vec:
         logger.info('Creating lower dimension embedding of documents')
 
         if self.use_pacmap:
-            map_model = pacmap.PaCMAP(**self.dimred_args).fit(self.document_vectors)
-            map_embedding = map_model.transform(self.document_vectors)
+            self.map_model = pacmap.PaCMAP(**self.dimred_args).fit(self.document_vectors)
+            self.map_embedding = self.map_model.transform(self.document_vectors)
 
         if self.dimred_args is None:
             self.dimred_args = {'n_neighbors': 15,
                          'n_components': 5,
                          'metric': 'cosine'}
         if self.gpu_umap and _HAVE_CUMAP:
-            map_model = cuUMAP(**self.dimred_args).fit(self.document_vectors)
-            map_embedding = map_model.transform(self.document_vectors)
+            self.map_model = cuUMAP(**self.dimred_args).fit(self.document_vectors)
+            map_embedding = self.map_model.transform(self.document_vectors)
         else:
-            map_model = umap.UMAP(**self.dimred_args).fit(self.document_vectors)
-            map_embedding = map_model.embedding_
+            self.map_model = umap.UMAP(**self.dimred_args).fit(self.document_vectors)
+            self.map_embedding = self.map_model.embedding_
 
         # find dense areas of document vectors
         logger.info('Finding dense areas of documents')
@@ -1291,18 +1299,20 @@ class Top2Vec:
                             'cluster_selection_method': 'eom'}
 
         if self.gpu_hdbscan and _HAVE_CUHDBSCAN:
-            cluster = cuHDBSCAN(**self.hdbscan_args)
-            labels = cluster.fit_predict(map_embedding)
+            self.cluster = cuHDBSCAN(**self.hdbscan_args)
+            self.labels = self.cluster.fit_predict(self.map_embedding)
 
         else:
-            cluster = hdbscan.HDBSCAN(**self.hdbscan_args).fit(map_embedding)
-            labels = cluster.labels_
+            self.cluster = hdbscan.HDBSCAN(**self.hdbscan_args).fit(self.map_embedding)
+            self.labels = self.cluster.labels_
+
+    def discover_topics(self):
 
         # calculate topic vectors from dense areas of documents
         logger.info('Finding topics')
 
         # create topic vectors
-        self._create_topic_vectors(labels)
+        self._create_topic_vectors(self.labels)
 
         # deduplicate topics
         self._deduplicate_topics(self.topic_merge_delta)

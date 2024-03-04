@@ -15,6 +15,8 @@ setuptools.setup(
     url="https://github.com/ddangelov/Top2Vec",
     keywords="topic modeling semantic search word document embedding",
     license="BSD",
+    include_package_data=True,
+    package_data={'top2vec_modified': ['*.yaml']},
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Programming Language :: Python :: 3",
