@@ -31,6 +31,7 @@ setuptools.setup(
         'numpy >= 1.20.0',
         'pandas',
         'pacmap',
+        'pyyaml',
         'scikit-learn >= 1.2.0',
         'gensim >= 4.0.0',
         'umap-learn >= 0.5.1',

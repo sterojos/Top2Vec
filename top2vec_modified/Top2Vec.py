@@ -607,12 +607,13 @@ class Top2Vec:
 
         if from_model_path:
             model = cls.load(from_model_path)
-            model_phases = getattr(model, "phases", [])
+            model_phases = list(getattr(model, "phases", []))
             expected_config = model.__dict__
             for key, value in config.items():
                 if key not in relevant_attrs:
-                    if (k1 := expected_config.get(key)) and (k2 := config.get(key)) and k1 != k2:
-                        logging.warn(f"Value for unused config attribute {key} does not match. The value from loaded model will be kept.")
+                    #TODO
+                    #if (k1 := expected_config.get(key)) and (k2 := config.get(key)) and k1 != k2:
+                    #    logging.warn(f"Value for unused config attribute {key} does not match. The value from loaded model will be kept.")
                     continue
                 if key in expected_config and expected_config[key] != value and not override_config:
                     raise ValueError(f"Attempt to overwrite value {str(expected_config[key])} with {str(value)} for attribute {key}")
