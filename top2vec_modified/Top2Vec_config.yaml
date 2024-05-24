@@ -133,7 +133,7 @@ sentencizer: null
 #     * fast-learn
 #     * learn
 #     * deep-learn
-speed: learn
+speed: deep-learn
 
 # This parameter is only used when using doc2vec as embedding_model.
 # Setting use_corpus_file to True can sometimes provide speedup for
@@ -186,6 +186,7 @@ hdbscan_args: null
 # instructions here: https://docs.rapids.ai/install
 gpu_hdbscan: false
 
+# If True, replaces UMAP dimension reduction with PaCMAP
 use_pacmap: false
 
 # If True, the topic vectors will be indexed using hnswlib. This will
@@ -218,11 +219,13 @@ phases:
     - keep_documents
     - workers
     - tokenizer
+    - split_documents
     - use_embedding_model_tokenizer
   reduce_dimension:
     - verbose
     - dimred_args
     - gpu_umap
+    - use_pacmap
   discover_topics:
     - verbose
     - topic_merge_delta

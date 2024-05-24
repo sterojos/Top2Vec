@@ -7,10 +7,9 @@
 
 What's going on in this fork: modularizing Top2Vec
 =======
-###TODO
 
-- Separate the run of the `Top2Vec` algorithm (i.e. `Top2Vec.__init__()`) into phases as already roughly specified in the description below
-- Modify `Top2Vec.__init__()` to accept an extra argument, which specifies the phases that should be run
+- The Top2Vec algorithm was separated into phases as already roughly specified in the original description below.
+- A class method `Top2Vec.run()` was created, which works similarly to the Top2Vec constructor, but can also run from an existing model or finish in an earlier phase.
    - Example: 
    ````python
    from Top2Vec import Top2Vec
@@ -26,17 +25,14 @@ What's going on in this fork: modularizing Top2Vec
    #these two calls should be equivalent
 
    model = Top2Vec(documents)
-   model = Top2Vec(documents, phases=phases)
+   model = Top2Vec.run(documents, phases=phases)
    ````
-   - Require `documents` only if the first phase will be run. Otherwise, require `model`, which is a saved model that must already contain all of the previous phases.
-      - This will probably require `keep_documents=True`
 
-- Include some metadata about the model into the `Top2Vec` object, most importantly the `phases`.
-- Create a new "wrapper constructor" class method `from_config`, satisfying the following:
-  - Accepts a YAML config file similar to [the default config](top2vec_modified/Top2Vec_config.yaml).
-  - If any arguments are missing in the config, the default arguments are used. 
-  - Hard to use callables from a config file though, so this is not a priority
+- Since there's a lot of parameters to the Top2Vec class, they were moved to a [config file](top2vec_modified/Top2Vec_config.yaml). `Top2Vec.run` accepts a `config_modifier` argument to change parameters in the config. If any parameters are missing in the config modifier, the default parameters are used. 
+- The fork should be fully compatible with the original Top2Vec implementation, only adding extra functionality.
 
+Top2Vec
+======= 
 
 **Updates:**
 
@@ -44,9 +40,6 @@ What's going on in this fork: modularizing Top2Vec
 * Ability to use any embedding model by passing callable to `embedding_model`
 * Document chunking options for long documents
 * Phrases in topics by setting `ngram_vocab=True`
-
-Top2Vec
-======= 
 
 Top2Vec is an algorithm for **topic modeling** and **semantic search**. It automatically detects topics present in text
 and generates jointly embedded topic, document and word vectors. Once you train the Top2Vec model 

@@ -416,14 +416,14 @@ class Top2Vec:
         self.use_sentencizer = False
         self.custom_chunker = False
         if self.split_documents:
-            if document_chunker == 'sequential':
-                document_chunker = get_chunks
-            elif document_chunker == 'random':
-                document_chunker = get_random_chunks
-            elif callable(document_chunker):
+            if self.document_chunker == 'sequential':
+                self.document_chunker = get_chunks
+            elif self.document_chunker == 'random':
+                self.document_chunker = get_random_chunks
+            elif callable(self.document_chunker):
                 self.custom_chunker = True
             elif self.sentencizer is None:
-                raise ValueError(f"{document_chunker} is an invalid document chunker.")
+                raise ValueError(f"{self.document_chunker} is an invalid document chunker.")
             elif callable(self.sentencizer):
                 self.use_sentencizer = True
             else:
@@ -575,68 +575,88 @@ class Top2Vec:
         self.word_index = word_index_temp
         self.topic_index = topic_index_temp
 
+    @staticmethod
+    def get_config() -> dict:
+        with open(os.path.join(os.path.dirname(__file__), 'Top2Vec_config.yaml')) as f:
+            return yaml.safe_load(f)
+
     @classmethod
-    def run(cls, documents=None, from_model_path=None, config_modifier=None, override_config=True):
+    def run(cls, 
+            documents=None, 
+            from_model_path=None,
+            from_model_instance=None, 
+            config_modifier=None, 
+            override_config=True
+        ):
         """f
-        TODO:
-        Implement loading the config from file.
-        
+        Pass either documents, a path to a saved model, or an already loaded instance to this function.
+        The default config in Top2Vec_config.yaml can be changed using a dict passed to the function as the
+        config_modifier parameter.
         """
 
         with open(os.path.join(os.path.dirname(__file__), 'Top2Vec_config.yaml')) as f:
             config: dict = yaml.safe_load(f)
             phases = list(config["phases"])
 
-        #generate config
+        # generate config
         if config_modifier is not None:
             assert isinstance(config_modifier, dict), "Config modifier is not a dictionary"
-            assert all(k in config for k in config_modifier)
+            assert not (invalid_params := [k for k in config_modifier if k not in config]), f"Invalid params: {invalid_params}"
+            if "phases" not in config_modifier:
+                raise ValueError("Please specify the phases of the algorithm that should be run. (Use Top2Vec.get_config() to get the valid phases.)")
 
-            #copy attributes from default config to user-defined config
+            # copy attributes from default config to user-defined config
             config_modifier["phases"] = {k: v for k, v in config["phases"].items() if k in config_modifier["phases"]}
             config.update(config_modifier)
 
+        # attributes used by the phases that will be executed
         relevant_attrs = list(set([i for v in config["phases"].values() for i in v]))
 
-        #validate input args
-        if not (documents or from_model_path):
+        # validate input args
+        if not (documents or from_model_path or from_model_instance):
             raise ValueError("No documents or existing model provided - Top2Vec cannot initiate.")
 
-        if (documents is None) == (from_model_path is None):
-            raise ValueError("Please provide either starting documents, or an existing model")
+        passed_inputs = list(filter(None, [documents, from_model_path, from_model_instance]))
 
-        if from_model_path:
-            model = cls.load(from_model_path)
-            model_phases = list(getattr(model, "phases", []))
-            expected_config = model.__dict__
-            for key, value in config.items():
-                if key not in relevant_attrs:
-                    #TODO
-                    #if (k1 := expected_config.get(key)) and (k2 := config.get(key)) and k1 != k2:
-                    #    logging.warn(f"Value for unused config attribute {key} does not match. The value from loaded model will be kept.")
-                    continue
-                if key in expected_config and expected_config[key] != value and not override_config:
-                    raise ValueError(f"Attempt to overwrite value {str(expected_config[key])} with {str(value)} for attribute {key}")
-                setattr(model, key, value)        
-        else:
+        if len(passed_inputs) > 1:
+            raise ValueError("Multiple inputs passed. Please only pass one of the input options (documents, model path, or model instance).")
+
+        if documents:
             model_phases = list()
-            #check that we can start at the beginning
+            # check that we can start at the beginning
             if (initial_phase := phases[0]) not in config["phases"]:
                 raise ValueError(f"Initial phase {initial_phase} not in specified phases. Cannot start building model from documents.")
             model = Top2Vec(plain=True)
             for key, value in config.items():
                 setattr(model, key, value)
+        else:
+            if from_model_path:
+                model = cls.load(from_model_path)
+            elif from_model_instance:
+                model = from_model_instance
+            else:
+                raise RuntimeError("Failed to load model")
+            assert model is not None
+
+            model_phases = list(getattr(model, "phases", []))
+            expected_config = model.__dict__
+            for key, value in config.items():
+                if key not in relevant_attrs:
+                    continue
+                if key in expected_config and expected_config[key] != value and not override_config:
+                    raise ValueError(f"Attempt to overwrite value {str(expected_config[key])} with {str(value)} for attribute {key}")
+                setattr(model, key, value)
         
         executed_phases = list(config["phases"])
 
         if (duplicate_phases := [phase for phase in executed_phases if phase in model_phases]):
-            raise ValueError(f"Phases scheduled for execution already included in passed model: {duplicate_phases}")
+            logger.warning(f"Phases scheduled for execution already included in passed model: {duplicate_phases}")
 
         #validate continuity of phases
         executed_phase_order = sorted([phases.index(i) for i in model_phases + executed_phases])
         phase_order_diff = [executed_phase_order[i+1] - executed_phase_order[i] for i in range(len(executed_phase_order) - 1)]
         if any(i != 1 for i in phase_order_diff):
-            raise ValueError(f"Missing phase in between executed phases, please verify phases in config. Indices: {phase_order_diff}")
+            logger.warning(f"Missing phase in between executed phases, please verify phases in config. Indices: {phase_order_diff}")
         
         if model.verbose:
             logger.setLevel(logging.DEBUG)
@@ -1276,18 +1296,24 @@ class Top2Vec:
         # create 5D embeddings of documents
         logger.info('Creating lower dimension embedding of documents')
 
-        if self.use_pacmap:
-            self.map_model = pacmap.PaCMAP(**self.dimred_args).fit(self.document_vectors)
-            self.map_embedding = self.map_model.transform(self.document_vectors)
-
         if self.dimred_args is None:
-            self.dimred_args = {'n_neighbors': 15,
-                         'n_components': 5,
-                         'metric': 'cosine'}
-        if self.gpu_umap and _HAVE_CUMAP:
+            if not self.use_pacmap:
+                self.dimred_args = {'n_neighbors': 15,
+                                'n_components': 5,
+                                'metric': 'cosine'}
+            else:
+                self.dimred_args = {'n_components': 5}
+        if self.use_pacmap:
+            logging.info("Executing PaCMAP dimension reduction")
+            self.map_model = pacmap.PaCMAP(**self.dimred_args)
+            self.map_embedding = self.map_model.fit_transform(self.document_vectors)
+
+        elif self.gpu_umap and _HAVE_CUMAP:
+            logging.info("Executing cuUMAP dimension reduction")
             self.map_model = cuUMAP(**self.dimred_args).fit(self.document_vectors)
-            map_embedding = self.map_model.transform(self.document_vectors)
+            self.map_embedding = self.map_model.transform(self.document_vectors)
         else:
+            logging.info("Executing UMAP dimension reduction")
             self.map_model = umap.UMAP(**self.dimred_args).fit(self.document_vectors)
             self.map_embedding = self.map_model.embedding_
 
