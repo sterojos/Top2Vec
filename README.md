@@ -22,10 +22,11 @@ What's going on in this fork: modularizing Top2Vec
 
    documents = ["Example 1", "Example 2", "Example 3"]
 
+   config_modifier = dict(phases=phases)
+   
    #these two calls should be equivalent
-
    model = Top2Vec(documents)
-   model = Top2Vec.run(documents, phases=phases)
+   model = Top2Vec.run(documents, config_modifier=config_modifier)
    ````
 
 - Since there's a lot of parameters to the Top2Vec class, they were moved to a [config file](top2vec_modified/Top2Vec_config.yaml). `Top2Vec.run` accepts a `config_modifier` argument to change parameters in the config. If any parameters are missing in the config modifier, the default parameters are used. 
